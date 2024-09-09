@@ -1,0 +1,88 @@
+import cv2
+import numpy as np
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing.image import img_to_array
+import os
+from tensorflow.keras.utils import CustomObjectScope
+from tensorflow.keras.optimizers import Adam
+import tensorflow as tf
+
+# Ensure you have installed the necessary libraries:
+# pip install opencv-python-headless numpy tensorflow
+#Use tensorflow v2.1
+
+# Download the pre-trained model from:
+# https://github.com/oarriaga/face_classification/blob/master/trained_models/emotion_models/fer2013_mini_XCEPTION.102-0.66.hdf5
+
+def load_emotion_model(model_path):
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found at {model_path}")
+
+    # Load the model with CustomObjectScope to handle legacy optimizers
+    with CustomObjectScope({'GlorotUniform': tf.keras.initializers.glorot_uniform()}):
+        model = load_model(model_path)
+
+    # Check and update optimizer configuration if 'lr' is present
+    optimizer_config = model.optimizer.get_config()
+    if 'lr' in optimizer_config:
+        optimizer_config['learning_rate'] = optimizer_config.pop('lr')
+        model.compile(optimizer=Adam(**optimizer_config))
+
+    return model
+
+def detect_faces(image):
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+    return faces, gray
+
+def predict_emotion(face_image, model):
+    emotions = ['Angry', 'Disgust', 'Fear', 'Happy', 'Sad', 'Surprise', 'Neutral']
+    face_image = cv2.resize(face_image, (64, 64))
+    face_image = face_image.astype("float") / 255.0
+    face_image = img_to_array(face_image)
+    face_image = np.expand_dims(face_image, axis=0)
+
+    predictions = model.predict(face_image)[0]
+    emotion = emotions[predictions.argmax()]
+    return emotion, predictions.max()
+
+def analyze_facial_sentiment(image_path, model):
+    image = cv2.imread(image_path)
+    faces, gray = detect_faces(image)
+
+    if len(faces) == 0:
+        return "No faces detected in the image."
+
+    results = []
+    for (x, y, w, h) in faces:
+        face_image = gray[y:y+h, x:x+w]
+        emotion, confidence = predict_emotion(face_image, model)
+        results.append(f"Face detected - Emotion: {emotion} (Confidence: {confidence:.2f})")
+
+        # Draw rectangle around face and label with emotion
+        cv2.rectangle(image, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        cv2.putText(image, emotion, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+
+    # Save the annotated image
+    output_path = 'output_' + image_path.split('/')[-1]
+    cv2.imwrite(output_path, image)
+
+    return "\n".join(results) + f"\nAnnotated image saved as {output_path}"
+
+# Example model path
+model_path = r"/content/fer2013_big_XCEPTION.54-0.66.hdf5"
+try:
+    emotion_model = load_emotion_model(model_path)
+except FileNotFoundError as e:
+    print(f"Error: {e}")
+    exit(1)
+
+#insert the image path
+image_path = "/example/image.jpg"
+
+if emotion_model is not None:
+    result = analyze_facial_sentiment(image_path, emotion_model)
+    print(result)
+else:
+    print("Error: Could not load emotion model. Facial sentiment analysis aborted.")
